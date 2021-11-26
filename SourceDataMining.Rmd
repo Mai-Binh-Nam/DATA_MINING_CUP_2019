@@ -1,0 +1,245 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+### Loading+Cleaning data
+```{r}
+library(tidyverse)
+
+checkoutDF=read.csv("E:/Nam 4/DM/Semi-final/Competition/train.csv", sep = '|')
+checkoutDF=as.data.frame(checkoutDF)
+```
+
+```{r}
+checkoutDF
+```
+
+
+```{r}
+checkoutDF%>%count(fraud)
+```
+
+### Thêm cột totalScannedLineItems và scale dữ liệu.
+```{r}
+checkoutDF$totalScannedLineItems=checkoutDF$scannedLineItemsPerSecond*checkoutDF$totalScanTimeInSeconds
+```
+
+```{r}
+checkoutDF[,-10]<-scale(checkoutDF[,-10])
+head(checkoutDF)
+```
+```{r}
+checkoutDF
+```
+### Chia dữ liệu thành train và test. Tỷ lệ Frand 0 và 1 ở tập train có tỷ lệ bằng so với tập dữ liệu gốc
+```{r}
+library(caret)
+```
+
+```{r}
+set.seed(42)
+train_perc = 0.75
+train_index <- createDataPartition(checkoutDF$fraud, p=train_perc, list=FALSE)
+
+data_train <- checkoutDF[train_index,]
+data_test <- checkoutDF[-train_index,]
+```
+
+```{r}
+data_train%>%count(fraud)
+```
+
+### tree modeling
+```{r}
+library(tree)
+```
+
+```{r}
+data_train$fraud<-as.factor(data_train$fraud)
+data_test$fraud<-as.factor(data_test$fraud)
+```
+
+```{r}
+checkoutDF.tree=tree(data_train$fraud ~ ., data = data_train)
+plot(checkoutDF.tree)
+text(checkoutDF.tree,pretty=0)
+tree.pred=predict(checkoutDF.tree,data_test[,-10],type="class")
+a=table(tree.pred,data_test[,10])
+```
+
+```{r}
+cost<-function(a){
+  return(a[1,1]*0+a[1,2]*-5+a[2,1]*-25+a[2,2]*5)
+}
+```
+
+```{r}
+cost(a)
+```
+```{r}
+cv.checkoutDF=cv.tree(checkoutDF.tree,FUN=prune.misclass)
+plot(cv.checkoutDF$size,cv.checkoutDF$dev,type = "b")
+```
+```{r}
+prunetree.checkoutDF = prune.misclass(checkoutDF.tree, best=10)
+plot(prunetree.checkoutDF)
+text(prunetree.checkoutDF,pretty=0)
+```
+```{r}
+tree.pred=predict(prunetree.checkoutDF,data_test[,-10],type="class")
+a=table(tree.pred,data_test[,10])
+cost(a)
+```
+
+
+### randomforest
+```{r}
+library(randomForest)
+```
+
+```{r}
+rf.checkoutDF = randomForest(data_train$fraud ~ ., data = data_train,mtry = 8, importance = TRUE)
+
+rf.pred=predict(rf.checkoutDF,data_test[,-10],type="class")
+
+table(rf.pred,data_test[,10])
+cost(table(rf.pred,data_test[,10]))
+```
+###bayes modeling
+```{r}
+library(naivebayes)
+```
+
+
+```{r}
+bayes.checkoutDF <- naive_bayes(data_train$fraud ~ ., data = data_train)
+
+bayes.pred=predict(bayes.checkoutDF,data_test[,-10],type="class")
+
+table(bayes.pred,data_test[,10])
+cost(table(bayes.pred,data_test[,10]))
+```
+###svm
+
+```{r}
+library(e1071)
+```
+
+```{r}
+svm.checkoutDF = svm(data_train$fraud ~ ., 
+                 data = data_train, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+
+svm.pred=predict(svm.checkoutDF,data_test[,-10],type="class")
+
+table(svm.pred,data_test[,10])
+cost(table(svm.pred,data_test[,10]))
+```
+```{r}
+svm.model<-svm(data_train[,-10],y=NULL,
+               type='one-classification',
+               nu=0.5,
+               scale=TRUE,
+               kernel="linear")
+svm.pred=predict(svm.model,data_test[,-10],type="class")
+
+table(svm.pred,data_test[,10])
+cost(table(svm.pred,data_test[,10]))
+```
+### xgb modeling
+```{r}
+#install.packages("xgboost")
+library(xgboost)
+```
+
+```{r}
+set.seed(42)
+train_perc = 0.75
+train_index <- createDataPartition(checkoutDF$fraud, p=train_perc, list=FALSE)
+
+data_train <- checkoutDF[train_index,]
+data_test <- checkoutDF[-train_index,]
+```
+
+### Sử dụng cross validation để tìm ngưỡng xác suất phù hợp.
+```{r}
+set.seed(42)
+#ind.all = sample(1:size_train,size = size_train,replace = FALSE)
+#test_index=ind.all[((4-1)*size_fold+1):size_train]
+#data_train=checkoutDF[-test_index,]
+#data_test=checkoutDF[test_index,]
+nhold=4
+thres=c(0.1,0.2,0.25,0.3,1/3,2/3,0.4,0.41,0.42,0.43,0.45,0.5,0.55,0.56,0.58,0.59,0.6,0.62,0.65,5/7,0.7,0.8,0.85,0.9,0.95)
+size_df=length(checkoutDF[,1])
+size_fhold=floor(size_df/nhold)
+df_ind=sample(1:size_df,size = size_df,replace = FALSE)
+Pro.all=numeric(length = size_df)
+for(i in 1:nhold){
+  if(i<nhold){
+    test_ind=df_ind[((i-1)*size_fhold+1):(i*size_fhold)]
+  }
+  else if(i==nhold){
+    test_ind=df_ind[((i-1)*size_fhold+1):size_df]
+  }
+  data_train <- checkoutDF[-test_ind,]
+  data_test <- checkoutDF[test_ind,]
+  xgb.checkoutDF = xgboost(data = as.matrix(data_train[,-10]), 
+                         label = data_train$fraud, max.depth = 200, 
+                         eta = 1, nthread = 2, nrounds = 20,objective = "binary:logistic")
+  xgb.pred<-predict(xgb.checkoutDF,as.matrix(data_test[,-10]),type="class")
+  Pro.all[test_ind]=xgb.pred
+  print(cost(table(as.numeric(xgb.pred>0.6),as.matrix(data_test[,10]))))
+}
+for (p in thres) {
+  Pred.all=as.numeric(Pro.all>p)
+  table.all=table(Pred.all,as.matrix(checkoutDF[,10]))
+  print(paste("Thres",p,":",cost(table.all)/nhold))
+}
+```
+```{r}
+set.seed(42)
+train_perc = 0.74
+train_index <- createDataPartition(checkoutDF$fraud, p=train_perc, list=FALSE)
+
+data_train <- checkoutDF[train_index,]
+data_test <- checkoutDF[-train_index,]
+xgb.checkoutDF = xgboost(data = as.matrix(data_train[,-10]), 
+                         label = data_train$fraud, max.depth = 200, 
+                         eta = 1, nthread = 2, nrounds = 20,objective = "binary:logistic")
+
+xgb.pred=predict(xgb.checkoutDF,as.matrix(data_test[,-10]),type="class")
+xgb.pred <- as.numeric(xgb.pred > 0.6)
+a=table(xgb.pred,data_test[,10])
+cost(table(xgb.pred,data_test[,10]))
+
+```
+###Tạo file submit kết quả
+
+```{r}
+test=read.csv("E:/Nam 4/DM/Semi-final/Competition/test.csv", sep = '|')
+test=as.data.frame(test)
+```
+
+```{r}
+test$totalScannedLineItems=test$scannedLineItemsPerSecond*test$totalScanTimeInSeconds
+```
+
+```{r}
+test<-scale(test)
+head(test)
+```
+```{r}
+xgb.pred=predict(xgb.checkoutDF,as.matrix(test),type="class")
+xgb.pred <- as.numeric(xgb.pred > 0.6)
+xgb.pred
+```
+```{r}
+submit<-as.data.frame(xgb.pred)
+colnames(submit) <- 'fraud'
+write.csv(submit, file = "my_data.csv")
+```
+
